@@ -1,9 +1,5 @@
 #define ILI9341_2_DRIVER
 
-// #define TFT_WIDTH 320
-// #define TFT_HEIGHT 240
-// #define TFT_RGB
-
 #define TFT_MOSI 13 // SDI
 #define TFT_MISO 12 // SDO
 #define TFT_SCLK 14 // SCK
@@ -25,6 +21,3 @@
 
 #define SPI_FREQUENCY 40000000
 #define SPI_TOUCH_FREQUENCY 2500000
-
-// https://forum.arduino.cc/t/esp32-2432s028r-all-in-one-display-touch-spi-problems/1059746/20
-// https://mischianti.org/esp32-2432s028-cheap-yellow-display-high-resolution-pinout-datasheet-schema-and-specs/
