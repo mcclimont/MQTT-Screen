@@ -1,3 +1,4 @@
+// TFT Configuration
 #define ILI9341_2_DRIVER
 
 #define TFT_MOSI 13 // SDI
@@ -15,9 +16,23 @@
 #define LOAD_FONT8
 
 #define TFT_BL 27 // Backlight control
+#define TFT_BACKLIGHT_ON 1
 
+// For some reason the TOUCH_CS pin must be defined and set to 21, otherwise the tft does not work properly.
 #define TOUCH_CS 21
 #define TOUCH_IRQ 36
 
 #define SPI_FREQUENCY 40000000
 #define SPI_TOUCH_FREQUENCY 2500000
+
+// Touchscreen configuration
+#define XPT2046_IRQ 36  // T_IRQ
+#define XPT2046_MOSI 32 // T_DIN
+#define XPT2046_MISO 39 // T_OUT
+#define XPT2046_CLK 25  // T_CLK
+#define XPT2046_CS 33   // T_CS
+
+// RGB LED configuration
+#define LED_R 4
+#define LED_G 16
+#define LED_B 17

@@ -5,24 +5,10 @@
 // ILI9341 display driver and ESP32 2.8" 320x240 pin mapping are configured in include/User_Setup.h
 TFT_eSPI tft = TFT_eSPI();
 
-// Touchscreen pins
-#define XPT2046_IRQ 36  // T_IRQ
-#define XPT2046_MOSI 32 // GPIO23  // T_DIN
-#define XPT2046_MISO 39 // GPIO19  // T_OUT
-#define XPT2046_CLK 25  // GPIO18   // T_CLK
-#define XPT2046_CS 33   // T_CS
-#define FONT_SIZE 4
-
 SPIClass touchscreenSPI = SPIClass(HSPI);
 XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
-#define TFT_BACKLIGHT_ON 1
-
-#define LED_R 4
-#define LED_G 16
-#define LED_B 17
-
-bool screenInverted = false;
+#define FONT_SIZE 4
 
 // Touchscreen coordinates: (x, y) and pressure (z)
 int x, y, z;
@@ -81,51 +67,22 @@ void setup()
   // Note: in some displays, the touchscreen might be upside down, so you might need to set the rotation to 3: touchscreen.setRotation(3);
   touchscreen.setRotation(1);
 
+  Serial.println("TFT init done");
+
+  Serial.println("Startup screen content...");
+
   // Set X and Y coordinates for center of display
   int centerX = tft.width() / 2;
   int centerY = tft.height() / 2;
+  tft.drawCentreString("Starting...", centerX, centerY, FONT_SIZE);
 
-  tft.drawCentreString("Touch screen to test", centerX, centerY, FONT_SIZE);
+  tft.drawRect(2, 2, tft.width() - 4, tft.height() - 4, TFT_WHITE);
 
-  Serial.println("TFT init done");
-
-  Serial.println("TFT test content display starting...");
-  tft.drawRect(0, 0, tft.width(), tft.height(), TFT_GREEN);
-  tft.drawRect(2, 2, tft.width() - 4, tft.height() - 4, TFT_GREEN);
-
-  // Set "cursor" at top left corner of display (0,0) and select font 4
-  tft.setCursor(0, 4, 4);
-
-  // Set the font colour to be white with a black background
-  tft.setTextColor(TFT_WHITE);
-
-  // We can now plot text on screen using the "print" class
-  tft.println(" Initialised default\n");
-  tft.println(" White text");
-
-  tft.setTextColor(TFT_RED);
-  tft.println(" Red text");
-
-  tft.setTextColor(TFT_GREEN);
-  tft.println(" Green text");
-
-  tft.setTextColor(TFT_BLUE);
-  tft.println(" Blue text");
-
-  Serial.println("TFT test done");
+  Serial.println("Started");
 }
 
 void loop()
 {
-  // bool touched = touchscreen.touched();
-
-  // if (touched != screenInverted)
-  // {
-  //   screenInverted = touched;
-  //   tft.invertDisplay(screenInverted);
-  //   Serial.printf("Touch %s - invert %s\n", touched ? "detected" : "released", screenInverted ? "ON" : "OFF");
-  // }
-
   // Checks if Touchscreen was touched, and prints X, Y and Pressure (Z) info on the TFT display and Serial Monitor
   if (touchscreen.tirqTouched() && touchscreen.touched())
   {
