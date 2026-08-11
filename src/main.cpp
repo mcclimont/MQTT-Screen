@@ -1,8 +1,20 @@
 #include <SPI.h>
-
 #include <TFT_eSPI.h>
+#include <XPT2046_Touchscreen.h>
+
 // ILI9341 display driver and ESP32 2.8" 320x240 pin mapping are configured in include/User_Setup.h
 TFT_eSPI tft = TFT_eSPI();
+
+// Touchscreen pins
+#define XPT2046_IRQ 36  // T_IRQ
+#define XPT2046_MOSI 32 // GPIO23  // T_DIN
+#define XPT2046_MISO 39 // GPIO19  // T_OUT
+#define XPT2046_CLK 25  // GPIO18   // T_CLK
+#define XPT2046_CS 33   // T_CS
+#define FONT_SIZE 4
+
+SPIClass touchscreenSPI = SPIClass(HSPI);
+XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
 #define TFT_BACKLIGHT_ON 1
 
@@ -10,105 +22,44 @@ TFT_eSPI tft = TFT_eSPI();
 #define LED_G 16
 #define LED_B 17
 
-// static void scanI2CDevices()
-// {
-//   Wire.begin();
-//   Serial.println("I2C bus scan:");
-//   bool found = false;
+bool screenInverted = false;
 
-//   for (uint8_t address = 1; address < 127; ++address)
-//   {
-//     Wire.beginTransmission(address);
-//     uint8_t error = Wire.endTransmission();
+// Touchscreen coordinates: (x, y) and pressure (z)
+int x, y, z;
 
-//     if (error == 0)
-//     {
-//       Serial.printf("  Found I2C device at 0x%02X\n", address);
-//       found = true;
-//     }
-//     else if (error == 4)
-//     {
-//       Serial.printf("  Unknown error at 0x%02X\n", address);
-//     }
-//   }
+// Print Touchscreen info about X, Y and Pressure (Z) on the Serial Monitor
+void printTouchToSerial(int touchX, int touchY, int touchZ)
+{
+  Serial.print("X = ");
+  Serial.print(touchX);
+  Serial.print(" | Y = ");
+  Serial.print(touchY);
+  Serial.print(" | Pressure = ");
+  Serial.print(touchZ);
+  Serial.println();
+}
 
-//   if (!found)
-//   {
-//     Serial.println("  No I2C devices found");
-//   }
-// }
+// Print Touchscreen info about X, Y and Pressure (Z) on the TFT Display
+void printTouchToDisplay(int touchX, int touchY, int touchZ)
+{
+  // Clear TFT screen
+  tft.fillScreen(TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
 
-// static void scanSPIDevices()
-// {
-//   Serial.println("SPI device scan:");
-//   SPIClass spi(HSPI);
-//   spi.begin(TFT_SCLK, TFT_MISO, TFT_MOSI);
+  int centerX = tft.width() / 2;
+  int textY = 60;
 
-//   pinMode(TFT_CS, OUTPUT);
-//   digitalWrite(TFT_CS, HIGH);
-//   pinMode(TFT_DC, OUTPUT);
-//   digitalWrite(TFT_DC, HIGH);
-//   pinMode(TOUCH_CS, OUTPUT);
-//   digitalWrite(TOUCH_CS, HIGH);
+  String tempText = "X = " + String(touchX);
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
-//   // Probe ILI9341 display by reading its ID register.
-//   Serial.print("  Probing ILI9341 TFT (CS=");
-//   Serial.print(TFT_CS);
-//   Serial.println(")...");
+  textY += 40;
+  tempText = "Y = " + String(touchY);
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
-//   spi.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
-//   digitalWrite(TFT_CS, LOW);
-//   digitalWrite(TFT_DC, LOW);
-//   spi.transfer(0x04);
-//   uint8_t id1 = spi.transfer(0x00);
-//   uint8_t id2 = spi.transfer(0x00);
-//   uint8_t id3 = spi.transfer(0x00);
-//   digitalWrite(TFT_CS, HIGH);
-//   spi.endTransaction();
-
-//   Serial.printf("    ILI9341 ID bytes: %02X %02X %02X\n", id1, id2, id3);
-
-//   Serial.println("  Reading ILI9341 command registers:");
-// // If a hardware reset line is available, pulse it before reads
-// #if defined(TFT_RST)
-//   if (TFT_RST != -1)
-//   {
-//     pinMode(TFT_RST, OUTPUT);
-//     digitalWrite(TFT_RST, LOW);
-//     delay(20);
-//     digitalWrite(TFT_RST, HIGH);
-//     delay(50);
-//     Serial.printf("    Pulsed TFT_RST=%d\n", TFT_RST);
-//   }
-//   else
-//   {
-//     Serial.println("    TFT_RST not defined or -1; skipping hardware reset");
-//   }
-// #endif
-
-//   Serial.printf("    0xD3 Read ID1 = 0x%02X\n", tft.readcommand8(0xD3, 1));
-//   Serial.printf("    0xD3 Read ID2 = 0x%02X\n", tft.readcommand8(0xD3, 2));
-//   Serial.printf("    0xD3 Read ID3 = 0x%02X\n", tft.readcommand8(0xD3, 3));
-//   Serial.printf("    0xD3 Read ID4 = 0x%02X\n", tft.readcommand8(0xD3, 4));
-//   Serial.printf("    0x0A Read Power Mode = 0x%02X\n", tft.readcommand8(0x0A, 1));
-//   Serial.printf("    0x0B Read MADCTL = 0x%02X\n", tft.readcommand8(0x0B, 1));
-//   Serial.printf("    0x0C Read Pixel Format = 0x%02X\n", tft.readcommand8(0x0C, 1));
-//   Serial.printf("    0x09 Read Status = 0x%02X\n", tft.readcommand8(0x09, 1));
-
-//   // Probe XPT2046 touch controller briefly by toggling CS and reading a single response byte.
-//   Serial.print("  Probing XPT2046 touch controller (CS=");
-//   Serial.print(TOUCH_CS);
-//   Serial.println(")...");
-
-//   digitalWrite(TOUCH_CS, LOW);
-//   spi.transfer(0x90);
-//   uint8_t resp = spi.transfer(0x00);
-//   digitalWrite(TOUCH_CS, HIGH);
-
-//   Serial.printf("    XPT2046 sample response: %02X\n", resp);
-
-//   spi.end();
-// }
+  textY += 40;
+  tempText = "Pressure = " + String(touchZ);
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
+}
 
 void setup()
 {
@@ -117,23 +68,25 @@ void setup()
   Serial.begin(115200);
   Serial.println("Boot OK");
 
-  // Run I2C/SPI diagnostic scans after TFT initialization
-  // Ensure backlight is enabled so we can see the display
-  // pinMode(TFT_BL, OUTPUT);
-  // digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
-  // analogWrite(TFT_BL, 128); // Set backlight brightness (0-255) if using PWM control
-
-  // Serial.println("I2C/SPI device scan starting...");
-  // scanI2CDevices();
-  // scanSPIDevices();
-  // Serial.println("I2C/SPI device scan complete.");
-
   Serial.println("Starting TFT...");
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
 
-  // tft.setRotation(1);
+  Serial.println("Starting touch...");
+  // Start the SPI for the touchscreen and init the touchscreen
+  touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  touchscreen.begin(touchscreenSPI);
+  // Set the Touchscreen rotation in landscape mode
+  // Note: in some displays, the touchscreen might be upside down, so you might need to set the rotation to 3: touchscreen.setRotation(3);
+  touchscreen.setRotation(1);
+
+  // Set X and Y coordinates for center of display
+  int centerX = tft.width() / 2;
+  int centerY = tft.height() / 2;
+
+  tft.drawCentreString("Touch screen to test", centerX, centerY, FONT_SIZE);
+
   Serial.println("TFT init done");
 
   Serial.println("TFT test content display starting...");
@@ -164,6 +117,28 @@ void setup()
 
 void loop()
 {
-  delay(5000);
-  tft.invertDisplay(false); // Where i is true or false
+  // bool touched = touchscreen.touched();
+
+  // if (touched != screenInverted)
+  // {
+  //   screenInverted = touched;
+  //   tft.invertDisplay(screenInverted);
+  //   Serial.printf("Touch %s - invert %s\n", touched ? "detected" : "released", screenInverted ? "ON" : "OFF");
+  // }
+
+  // Checks if Touchscreen was touched, and prints X, Y and Pressure (Z) info on the TFT display and Serial Monitor
+  if (touchscreen.tirqTouched() && touchscreen.touched())
+  {
+    // Get Touchscreen points
+    TS_Point p = touchscreen.getPoint();
+    // Calibrate Touchscreen points with map function to the correct width and height
+    x = map(p.x, 200, 3700, 1, tft.width());
+    y = map(p.y, 240, 3800, 1, tft.height());
+    z = p.z;
+
+    printTouchToSerial(x, y, z);
+    printTouchToDisplay(x, y, z);
+
+    delay(100);
+  }
 }
