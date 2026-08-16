@@ -6,3 +6,6 @@
 .vscode/launch.json
 .vscode/ipch
 compile_commands.json
+
+# Private configuration - DO NOT COMMIT
+include/config.h

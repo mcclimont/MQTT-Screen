@@ -45,12 +45,17 @@ References:
 ## Target Device MQTT Topics
 The target device publishes the following MQTT topics:
 
-- home/relay1
-- home/relay2
-- home/relay3
-- home/relay4
+- home/relay1/set
+- home/relay1/state
+- home/relay2/set
+- home/relay2/state
+- home/relay3/set
+- home/relay3/state
+- home/relay4/set
+- home/relay4/state
 
-Each topic accepts the payload values:
+Each set topic accepts the payload values:
 
 - ON
 - OFF
+- TOGGLE
