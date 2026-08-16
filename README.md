@@ -54,8 +54,10 @@ The target device publishes the following MQTT topics:
 - home/relay4/set
 - home/relay4/state
 
-Each set topic accepts the payload values:
+The `set` topics accept these payload values:
 
 - ON
 - OFF
 - TOGGLE
+
+The `state` topics will retrieve the current state of `ON` or `OFF`.
