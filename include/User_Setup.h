@@ -10,10 +10,11 @@
 
 #define LOAD_GLCD
 #define LOAD_FONT2
-#define LOAD_FONT4
-#define LOAD_FONT6
-#define LOAD_FONT7
-#define LOAD_FONT8
+// Only font 2 is used by the sketch (via tft.setCursor(..., 2)); the other TFT_eSPI fonts are not referenced.
+// #define LOAD_FONT4
+// #define LOAD_FONT6
+// #define LOAD_FONT7
+// #define LOAD_FONT8
 
 #define TFT_BL 27 // Backlight control
 #define TFT_BACKLIGHT_ON 1
