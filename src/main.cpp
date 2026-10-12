@@ -353,6 +353,20 @@ void setup()
   // --------------------
   printStatus(F("Starting PicoMQTT interface..."), true, true);
   setLEDColor(0, 0, 100); // Change the RGB LED to blue to indicate PicoMQTT initialization
+  mqtt.connected_callback = []()
+  {
+    Serial.printf("[DEBUG] MQTT connected to %s:%u\r\n", MQTT_BROKER, MQTT_PORT);
+  };
+  mqtt.disconnected_callback = []()
+  {
+    Serial.println("[DEBUG] MQTT disconnected");
+  };
+  mqtt.connection_failure_callback = []()
+  {
+    Serial.printf("[DEBUG] MQTT connection failed to %s:%u\r\n", MQTT_BROKER, MQTT_PORT);
+  };
+  Serial.printf("[DEBUG] MQTT broker=%s port=%u client_id=%s\r\n",
+                MQTT_BROKER, MQTT_PORT, DEVICE_NAME);
   mqtt.begin();
   subscribeToRelayStateTopics();
   lastRelayStateRefresh = millis();
