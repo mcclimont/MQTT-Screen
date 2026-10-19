@@ -1,5 +1,6 @@
 // TFT Configuration
 #define ILI9341_2_DRIVER
+#define TFT_RGB_ORDER TFT_BGR
 
 #define TFT_MOSI 13 // SDI
 #define TFT_MISO 12 // SDO
@@ -16,11 +17,11 @@
 // #define LOAD_FONT7
 // #define LOAD_FONT8
 
-#define TFT_BL 27 // Backlight control
+#define TFT_BL 21 // Backlight control
 #define TFT_BACKLIGHT_ON 1
 
 // For some reason the TOUCH_CS pin must be defined and set to 21, otherwise the tft does not work properly.
-#define TOUCH_CS 21
+#define TOUCH_CS 27
 #define TOUCH_IRQ 36
 
 #define SPI_FREQUENCY 40000000

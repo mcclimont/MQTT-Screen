@@ -54,6 +54,23 @@ const int daylightOffset_sec = 3600;
 // MQTT client
 PicoMQTT::Client mqtt(MQTT_BROKER, MQTT_PORT, DEVICE_NAME, MQTT_USER, MQTT_PASSWORD);
 
+void publishRelayToggle(int relayIndex)
+{
+  if (relayIndex < 0 || relayIndex >= 4)
+  {
+    return;
+  }
+
+  if (!mqtt.connected())
+  {
+    Serial.printf("Cannot toggle relay %d: MQTT is disconnected\r\n", relayIndex + 1);
+    return;
+  }
+
+  const bool published = mqtt.publish(relaySetTopics[relayIndex], "TOGGLE");
+  Serial.printf("Relay %d TOGGLE publish %s\r\n", relayIndex + 1, published ? "succeeded" : "failed");
+}
+
 // Network Details
 IPAddress myIP(0, 0, 0, 0);
 
@@ -70,9 +87,17 @@ int z = 0;
 // LVGL display buffer - keep the partial buffer small enough to fit the ESP32's RAM budget
 // while still letting the screen refresh reliably.
 static lv_color_t buf1[320 * 20];
+static const int SCREEN_BRIGHTNESS_PERCENT = 80;
+static const int SCREEN_DIMMED_BRIGHTNESS_PERCENT = 10;
+static const unsigned long SCREEN_IDLE_TIMEOUT_MS = 15000UL;
+static unsigned long lastTouchActivity = 0;
+static bool screenDimmed = false;
+static bool backlightPwmAttached = false;
 
 // Functions
 // ==========
+
+void setBackgroundBrightness(int brightness);
 
 void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
@@ -91,6 +116,13 @@ void my_touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   if (touchscreen.tirqTouched() && touchscreen.touched())
   {
+    lastTouchActivity = millis();
+    if (screenDimmed)
+    {
+      setBackgroundBrightness(SCREEN_BRIGHTNESS_PERCENT);
+      screenDimmed = false;
+    }
+
     TS_Point p = touchscreen.getPoint();
     x = map(p.x, 200, 3700, 0, tft.width() - 1);
     y = map(p.y, 240, 3800, 0, tft.height() - 1);
@@ -186,7 +218,19 @@ IPAddress getlocalIP()
 
 void setBackgroundBrightness(int brightness)
 {
-  analogWrite(TFT_BL, brightness * 2.55);
+  brightness = constrain(brightness, 0, 100);
+  if (!backlightPwmAttached)
+  {
+    backlightPwmAttached = ledcAttach(TFT_BL, 5000, 8);
+    if (!backlightPwmAttached)
+    {
+      Serial.printf("Failed to attach PWM to TFT backlight pin %d\r\n", TFT_BL);
+      return;
+    }
+  }
+
+  const uint32_t duty = (brightness * 255) / 100;
+  ledcWrite(TFT_BL, TFT_BACKLIGHT_ON ? duty : 255 - duty);
 }
 
 void setLEDColor(int r, int g, int b)
@@ -198,18 +242,6 @@ void setLEDColor(int r, int g, int b)
 
 // MQTT Functions
 // ==========
-
-void updateRelayButtonColor(int relayIndex)
-{
-  if (relayIndex < 0 || relayIndex >= 4 || relayButtons[relayIndex] == nullptr)
-    return;
-
-  lv_color_t buttonColor = relayStates[relayIndex] ? lv_color_hex(0x2ECC71) : lv_color_hex(0x7F8C8D);
-  lv_obj_set_style_bg_color(relayButtons[relayIndex], buttonColor, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_bg_opa(relayButtons[relayIndex], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_color(relayButtons[relayIndex], lv_color_white(), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_border_width(relayButtons[relayIndex], 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-}
 
 void handleRelayStateMessage(const char *topic, const char *payload)
 {
@@ -224,7 +256,7 @@ void handleRelayStateMessage(const char *topic, const char *payload)
 
   for (int i = 0; i < 4; ++i)
   {
-    Serial.printf("[DEBUG] comparing topic to relayStateTopics[%d] = '%s'\r\n", i, relayStateTopics[i]);
+    // Serial.printf("[DEBUG] comparing topic to relayStateTopics[%d] = '%s'\r\n", i, relayStateTopics[i]);
 
     if (strcmp(topic, relayStateTopics[i]) == 0)
     {
@@ -239,6 +271,11 @@ void handleRelayStateMessage(const char *topic, const char *payload)
       {
         newState = false;
       }
+      else if (statePayload.equalsIgnoreCase("GET") || statePayload.equalsIgnoreCase("SET"))
+      {
+        // Ignore "GET" and "SET" payloads as they are not valid for relay state updates
+        return;
+      }
       else
       {
         Serial.printf("[DEBUG] ignoring unexpected relay state payload '%s'\r\n", statePayload.c_str());
@@ -249,13 +286,13 @@ void handleRelayStateMessage(const char *topic, const char *payload)
 
       relayStates[i] = newState;
       printStatus(String("Relay ") + (i + 1) + " state update: " + (relayStates[i] ? "ON" : "OFF"));
-      updateRelayButtonColor(i);
+      lvgl_set_relay_state(i, newState);
       return;
     }
-    else
-    {
-      Serial.printf("[DEBUG] no match for index=%d\r\n", i);
-    }
+    // else
+    // {
+    //   Serial.printf("[DEBUG] no match for index=%d\r\n", i);
+    // }
   }
 
   Serial.println("[DEBUG] handleRelayStateMessage: topic not matched to any relayStateTopics");
@@ -313,7 +350,11 @@ void setup()
   printStatus(F("Starting TFT..."), true, false);
   tft.init();
   tft.setRotation(1);
-  setBackgroundBrightness(40); // Set background brightness
+
+  setBackgroundBrightness(SCREEN_BRIGHTNESS_PERCENT); // Set background brightness
+
+  // Enable inversion
+  tft.invertDisplay(true); // Equivalent to TFT_INVERSION_ON
 
   printStatus(F("Starting touch..."));
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
@@ -356,10 +397,12 @@ void setup()
   mqtt.connected_callback = []()
   {
     Serial.printf("[DEBUG] MQTT connected to %s:%u\r\n", MQTT_BROKER, MQTT_PORT);
+    lvgl_set_mqtt_connected(true);
   };
   mqtt.disconnected_callback = []()
   {
     Serial.println("[DEBUG] MQTT disconnected");
+    lvgl_set_mqtt_connected(false);
   };
   mqtt.connection_failure_callback = []()
   {
@@ -388,14 +431,17 @@ void setup()
   lv_indev_set_display(indev, display);
 
   lvgl_wrapper_init();
+  lastTouchActivity = millis();
+  screenDimmed = false;
   for (int i = 0; i < 4; ++i)
   {
     if (relayButtons[i] != nullptr)
     {
       lv_obj_set_style_radius(relayButtons[i], 10, LV_PART_MAIN);
-      updateRelayButtonColor(i);
     }
   }
+  lvgl_set_mqtt_connected(mqtt.connected());
+  lvgl_set_wifi_connected(WiFi.status() == WL_CONNECTED);
 
   printStatus(F("LVGL started"));
   setLEDColor(0, 0, 0); // Turn off the LED after successful startup
@@ -409,6 +455,7 @@ void loop()
   // Check WiFi connection status
   if (WiFi.status() != WL_CONNECTED)
   {
+    lvgl_set_wifi_connected(false);
     printStatus(F("WiFi disconnected! Reconnecting..."));
     // digitalWrite(led, HIGH); // turn the LED on
     WiFi.reconnect();
@@ -419,6 +466,7 @@ void loop()
       delay(250);
       printStatus(".", true, false, false);
     }
+    lvgl_set_wifi_connected(true);
     printStatus(F("Reconnected to WiFi!"));
     // digitalWrite(led, LOW); // turn the LED off
   }
@@ -455,5 +503,10 @@ void loop()
   }
 
   lv_timer_handler();
+  if (!screenDimmed && millis() - lastTouchActivity >= SCREEN_IDLE_TIMEOUT_MS)
+  {
+    setBackgroundBrightness(SCREEN_DIMMED_BRIGHTNESS_PERCENT);
+    screenDimmed = true;
+  }
   delay(5);
 }

@@ -3,10 +3,10 @@
 
 /**
  * PRIVATE CONFIGURATION - DO NOT COMMIT config.h TO GIT
- * 
+ *
  * Copy this file to config.h and update with your private values:
  * WiFi credentials, MQTT broker details, API keys, etc.
- * 
+ *
  * File: include/config.h (not tracked by git)
  */
 
@@ -22,5 +22,6 @@
 
 // Device Configuration
 #define DEVICE_NAME "mqtt-screen-device"
+#define SCREEN_TITLE "Your Light Controller"
 
 #endif // CONFIG_EXAMPLE_H
