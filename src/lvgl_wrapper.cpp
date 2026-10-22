@@ -18,14 +18,22 @@ static const int MAIN_CANVAS_HEIGHT = LV_VER_RES_MAX - MAIN_CANVAS_Y - STATUS_BA
 static const int STATUS_BAR_Y = LV_VER_RES_MAX - STATUS_BAR_HEIGHT;
 
 lv_obj_t *relayButtons[4] = {nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t *timerButtons[4] = {nullptr, nullptr, nullptr, nullptr};
 static bool relayStates[4] = {false, false, false, false};
 static bool relayStatesKnown[4] = {false, false, false, false};
+static bool timerStatesKnown[4] = {false, false, false, false};
+static uint32_t timerReportedSeconds[4] = {0, 0, 0, 0};
+static uint32_t timerReportedAtMs[4] = {0, 0, 0, 0};
 static bool mqttConnected = false;
 static bool wifiConnected = false;
 static lv_obj_t *mqttStatusIndicator = nullptr;
 static lv_obj_t *wifiStatusIndicator = nullptr;
 static lv_obj_t *rgbColorDots[3] = {nullptr, nullptr, nullptr};
 static lv_timer_t *rgbAnimationTimer = nullptr;
+static lv_timer_t *timerDisplayTimer = nullptr;
+static lv_obj_t *timerModal = nullptr;
+static lv_obj_t *timerModalMessage = nullptr;
+static int selectedRelayIndex = -1;
 static uint8_t rgbAnimationPhase = 0;
 static const uint32_t STATUS_RED = 0xFF0000;
 static const uint32_t STATUS_GREEN = 0x00FF00;
@@ -34,6 +42,217 @@ static const uint32_t RELAY_BUTTON_CONNECTED_OFF = 0x500a0a;    // 0xB85B5B
 static const uint32_t RELAY_BUTTON_DISCONNECTED_ON = 0x326940;  // 0x526B58
 static const uint32_t RELAY_BUTTON_DISCONNECTED_OFF = 0x2e0606; // 0x725454
 static const uint32_t RELAY_BUTTON_INITIAL = 0xD3D3D3;
+static const uint32_t TIMER_BUTTON_IDLE = 0x315A5A;
+static const uint32_t TIMER_BUTTON_ACTIVE = 0x35D0BA;
+
+static void updateTimerButton(int relayIndex)
+{
+  if (relayIndex < 0 || relayIndex >= 4 || timerButtons[relayIndex] == nullptr)
+  {
+    return;
+  }
+
+  lv_obj_t *label = lv_obj_get_child(timerButtons[relayIndex], 0);
+  if (!mqttConnected)
+  {
+    lv_label_set_text(label, "--");
+    lv_obj_set_style_bg_color(timerButtons[relayIndex], lv_color_hex(0x555555), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(timerButtons[relayIndex], lv_color_white(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    return;
+  }
+
+  if (!timerStatesKnown[relayIndex])
+  {
+    lv_label_set_text(label, "...");
+    lv_obj_set_style_bg_color(timerButtons[relayIndex], lv_color_hex(0x666666), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(timerButtons[relayIndex], lv_color_white(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    return;
+  }
+
+  const uint32_t elapsedSeconds = (millis() - timerReportedAtMs[relayIndex]) / 1000UL;
+  const uint32_t remainingSeconds = elapsedSeconds >= timerReportedSeconds[relayIndex]
+                                        ? 0
+                                        : timerReportedSeconds[relayIndex] - elapsedSeconds;
+  char remainingLabel[8];
+  if (remainingSeconds == 0)
+  {
+    lv_label_set_text(label, "Set");
+  }
+  else if (remainingSeconds >= 3600)
+  {
+    snprintf(remainingLabel, sizeof(remainingLabel), "%luh%02lu",
+             static_cast<unsigned long>(remainingSeconds / 3600),
+             static_cast<unsigned long>((remainingSeconds / 60) % 60));
+    lv_label_set_text(label, remainingLabel);
+  }
+  else if (remainingSeconds >= 60)
+  {
+    snprintf(remainingLabel, sizeof(remainingLabel), "%lum",
+             static_cast<unsigned long>(remainingSeconds / 60));
+    lv_label_set_text(label, remainingLabel);
+  }
+  else
+  {
+    snprintf(remainingLabel, sizeof(remainingLabel), "%lus",
+             static_cast<unsigned long>(remainingSeconds));
+    lv_label_set_text(label, remainingLabel);
+  }
+
+  const bool active = remainingSeconds > 0;
+  lv_obj_set_style_bg_color(timerButtons[relayIndex],
+                            lv_color_hex(active ? TIMER_BUTTON_ACTIVE : TIMER_BUTTON_IDLE),
+                            LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(timerButtons[relayIndex],
+                              lv_color_hex(active ? 0x073B38 : 0xFFFFFF),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+static void timerDisplayTimerCb(lv_timer_t *timer)
+{
+  (void)timer;
+  for (int relayIndex = 0; relayIndex < 4; ++relayIndex)
+  {
+    updateTimerButton(relayIndex);
+  }
+}
+
+static void closeTimerModal()
+{
+  if (timerModal != nullptr)
+  {
+    lv_obj_delete(timerModal);
+    timerModal = nullptr;
+  }
+
+  timerModalMessage = nullptr;
+  selectedRelayIndex = -1;
+}
+
+static void timerModalCloseEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) == LV_EVENT_CLICKED)
+  {
+    closeTimerModal();
+  }
+}
+
+static void timerModalOverlayEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) == LV_EVENT_CLICKED && lv_event_get_target(event) == timerModal)
+  {
+    closeTimerModal();
+  }
+}
+
+static void timerDurationEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || selectedRelayIndex < 0)
+  {
+    return;
+  }
+
+  const uint32_t durationSeconds = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+  if (publishRelayTimer(selectedRelayIndex, durationSeconds))
+  {
+    closeTimerModal();
+  }
+  else
+  {
+    lv_label_set_text(timerModalMessage, "Timer command was not sent.");
+  }
+}
+
+static void timerCancelEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || selectedRelayIndex < 0)
+  {
+    return;
+  }
+
+  if (cancelRelayTimer(selectedRelayIndex))
+  {
+    closeTimerModal();
+  }
+  else
+  {
+    lv_label_set_text(timerModalMessage, "Timer command was not sent.");
+  }
+}
+
+static lv_obj_t *createModalButton(lv_obj_t *parent, const char *text, int x, int y, int width, int height,
+                                   lv_event_cb_t callback, void *userData = nullptr)
+{
+  lv_obj_t *button = addButton(parent, text, x, y, width, height, nullptr);
+  lv_obj_set_style_radius(button, 5, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(button, lv_color_hex(0x35D0BA), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(button, lv_color_hex(0x073B38), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, userData);
+  return button;
+}
+
+static void openTimerModal(int relayIndex)
+{
+  if (relayIndex < 0 || relayIndex >= 4 || timerModal != nullptr || !mqttConnected)
+  {
+    return;
+  }
+
+  selectedRelayIndex = relayIndex;
+  lv_obj_t *screen = lv_scr_act();
+  timerModal = lv_obj_create(screen);
+  lv_obj_set_size(timerModal, LV_HOR_RES_MAX, LV_VER_RES_MAX);
+  lv_obj_set_pos(timerModal, 0, 0);
+  lv_obj_set_style_bg_color(timerModal, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(timerModal, LV_OPA_60, LV_PART_MAIN);
+  lv_obj_set_style_border_width(timerModal, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(timerModal, 0, LV_PART_MAIN);
+  lv_obj_add_event_cb(timerModal, timerModalOverlayEventCb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *panel = lv_obj_create(timerModal);
+  lv_obj_set_size(panel, 276, 186);
+  lv_obj_set_pos(panel, 22, 27);
+  lv_obj_set_style_radius(panel, 8, LV_PART_MAIN);
+  lv_obj_set_style_border_width(panel, 1, LV_PART_MAIN);
+  lv_obj_set_style_border_color(panel, lv_color_hex(0x35D0BA), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(panel, lv_color_hex(0x173A3A), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(panel, 0, LV_PART_MAIN);
+
+  lv_obj_t *title = lv_label_create(panel);
+  lv_label_set_text_fmt(title, "Light %d timer", relayIndex + 1);
+  lv_obj_set_pos(title, 14, 9);
+  lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
+  createModalButton(panel, "X", 242, 4, 28, 24, timerModalCloseEventCb);
+
+  static const char *durations[] = {"1 hour", "2 hours", "4 hours", "8 hours"};
+  static const uint32_t durationSeconds[] = {3600, 7200, 14400, 28800};
+  const int buttonX[] = {18, 146, 18, 146};
+  const int buttonY[] = {45, 45, 85, 85};
+  for (uint8_t option = 0; option < 4; ++option)
+  {
+    createModalButton(panel, durations[option], buttonX[option], buttonY[option], 112, 34,
+                      timerDurationEventCb,
+                      reinterpret_cast<void *>(static_cast<uintptr_t>(durationSeconds[option])));
+  }
+
+  timerModalMessage = lv_label_create(panel);
+  lv_label_set_text(timerModalMessage, "");
+  lv_obj_set_pos(timerModalMessage, 12, 124);
+  lv_obj_set_style_text_color(timerModalMessage, lv_color_hex(0xFFB2A8), LV_PART_MAIN);
+
+  createModalButton(panel, "Cancel timer", 15, 153, 246, 25, timerCancelEventCb);
+}
+
+static void timerButtonEventCb(lv_event_t *event)
+{
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED)
+  {
+    return;
+  }
+
+  const intptr_t relayIndex = reinterpret_cast<intptr_t>(lv_event_get_user_data(event)) - 1;
+  openTimerModal(static_cast<int>(relayIndex));
+}
 
 static void rgbAnimationTimerCb(lv_timer_t *timer)
 {
@@ -161,7 +380,9 @@ static void createHeader(lv_obj_t *screen)
 
 static void createMainCanvas(lv_obj_t *screen)
 {
-  const int buttonWidth = 130;
+  const int tileWidth = 130;
+  const int buttonWidth = 82;
+  const int timerButtonWidth = 44;
   const int buttonHeight = 60;
   const int gridColumnWidth = MAIN_CANVAS_WIDTH / 2;
   const int verticalSpace = MAIN_CANVAS_HEIGHT - (2 * buttonHeight);
@@ -171,10 +392,15 @@ static void createMainCanvas(lv_obj_t *screen)
   {
     const int column = i % 2;
     const int row = i / 2;
-    const int x = MAIN_CANVAS_X + column * gridColumnWidth + (gridColumnWidth - buttonWidth) / 2;
+    const int x = MAIN_CANVAS_X + column * gridColumnWidth + (gridColumnWidth - tileWidth) / 2;
     const int y = MAIN_CANVAS_Y + ((row + 1) * verticalSpace) / 3 + row * buttonHeight;
     relayButtons[i] = addButton(screen, buttonLabels[i], x, y, buttonWidth, buttonHeight, button_event_cb);
+    timerButtons[i] = addButton(screen, "Set", x + buttonWidth + 4, y, timerButtonWidth, buttonHeight, nullptr);
+    lv_obj_set_style_radius(timerButtons[i], 10, LV_PART_MAIN);
+    lv_obj_add_event_cb(timerButtons[i], timerButtonEventCb, LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<intptr_t>(i + 1)));
     updateRelayButtonColor(i);
+    updateTimerButton(i);
   }
 }
 
@@ -235,10 +461,18 @@ void lvgl_wrapper_init()
 
   // If this initializer is called again, clear the previous screen state first.
   stopRgbAnimation();
+  if (timerDisplayTimer != nullptr)
+  {
+    lv_timer_delete(timerDisplayTimer);
+    timerDisplayTimer = nullptr;
+  }
+  timerModal = nullptr;
+  timerModalMessage = nullptr;
   lv_obj_clean(screen);
   lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
   memset(relayButtons, 0, sizeof(relayButtons));
+  memset(timerButtons, 0, sizeof(timerButtons));
   mqttStatusIndicator = nullptr;
   wifiStatusIndicator = nullptr;
   rgbColorDots[0] = nullptr;
@@ -248,6 +482,7 @@ void lvgl_wrapper_init()
   createHeader(screen);
   createMainCanvas(screen);
   createStatusBar(screen);
+  timerDisplayTimer = lv_timer_create(timerDisplayTimerCb, 1000, nullptr);
 
   // Force a full redraw after all objects have been created so a later refresh does not drop the later widgets.
   lv_obj_invalidate(screen);
@@ -266,6 +501,7 @@ void lvgl_set_mqtt_connected(bool connected)
   for (int i = 0; i < 4; ++i)
   {
     updateRelayButtonColor(i);
+    updateTimerButton(i);
   }
   updateRgbAnimationState();
 }
@@ -280,6 +516,19 @@ void lvgl_set_relay_state(int relayIndex, bool isOn)
   relayStates[relayIndex] = isOn;
   relayStatesKnown[relayIndex] = true;
   updateRelayButtonColor(relayIndex);
+}
+
+void lvgl_set_timer_state(int relayIndex, uint32_t remainingSeconds)
+{
+  if (relayIndex < 0 || relayIndex >= 4)
+  {
+    return;
+  }
+
+  timerReportedSeconds[relayIndex] = remainingSeconds;
+  timerReportedAtMs[relayIndex] = millis();
+  timerStatesKnown[relayIndex] = true;
+  updateTimerButton(relayIndex);
 }
 
 void lvgl_set_wifi_connected(bool connected)
@@ -311,11 +560,3 @@ lv_obj_t *addButton(lv_obj_t *parent, const char *text, int x, int y, int w, int
   lv_obj_center(label);
   return btn;
 }
-
-#ifdef LVGL_LIVE_PREVIEW
-// Provide the live preview tool a way to initialize the UI
-void lvgl_live_preview_init(void)
-{
-  lvgl_wrapper_init();
-}
-#endif

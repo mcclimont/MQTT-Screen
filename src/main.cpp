@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <cstring>
+#include <cstdlib>
 // #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
@@ -39,9 +40,22 @@ const char *relayStateTopics[4] = {
     "home/relay3/state",
     "home/relay4/state"};
 
+const char *relayTimerSetTopics[4] = {
+    "home/relay1/timer/set",
+    "home/relay2/timer/set",
+    "home/relay3/timer/set",
+    "home/relay4/timer/set"};
+
+const char *relayTimerStateTopics[4] = {
+    "home/relay1/timer/state",
+    "home/relay2/timer/state",
+    "home/relay3/timer/state",
+    "home/relay4/timer/state"};
+
 bool relayStates[4] = {false, false, false, false};
 unsigned long lastRelayStateRefresh = 0;
 const unsigned long RELAY_STATE_REFRESH_INTERVAL_MS = 30000;
+bool relayStateRefreshPending = false;
 
 // NTP Server Details
 const char *ntpServer = "pool.ntp.org";
@@ -69,6 +83,28 @@ void publishRelayToggle(int relayIndex)
 
   const bool published = mqtt.publish(relaySetTopics[relayIndex], "TOGGLE");
   Serial.printf("Relay %d TOGGLE publish %s\r\n", relayIndex + 1, published ? "succeeded" : "failed");
+}
+
+bool publishRelayTimer(int relayIndex, uint32_t durationSeconds)
+{
+  if (relayIndex < 0 || relayIndex >= 4 || durationSeconds == 0 || !mqtt.connected())
+  {
+    return false;
+  }
+
+  char payload[11];
+  snprintf(payload, sizeof(payload), "%lu", static_cast<unsigned long>(durationSeconds));
+  return mqtt.publish(relayTimerSetTopics[relayIndex], payload);
+}
+
+bool cancelRelayTimer(int relayIndex)
+{
+  if (relayIndex < 0 || relayIndex >= 4 || !mqtt.connected())
+  {
+    return false;
+  }
+
+  return mqtt.publish(relayTimerSetTopics[relayIndex], "CANCEL");
 }
 
 // Network Details
@@ -298,6 +334,47 @@ void handleRelayStateMessage(const char *topic, const char *payload)
   Serial.println("[DEBUG] handleRelayStateMessage: topic not matched to any relayStateTopics");
 }
 
+void handleRelayTimerStateMessage(const char *topic, const char *payload)
+{
+  if (topic == nullptr || payload == nullptr)
+  {
+    return;
+  }
+
+  for (int relayIndex = 0; relayIndex < 4; ++relayIndex)
+  {
+    if (strcmp(topic, relayTimerStateTopics[relayIndex]) != 0)
+    {
+      continue;
+    }
+
+    String statePayload = payload;
+    statePayload.trim();
+    if (statePayload.isEmpty() || statePayload.equalsIgnoreCase("GET"))
+    {
+      return;
+    }
+
+    for (size_t charIndex = 0; charIndex < statePayload.length(); ++charIndex)
+    {
+      if (statePayload[charIndex] < '0' || statePayload[charIndex] > '9')
+      {
+        return;
+      }
+    }
+
+    char *end = nullptr;
+    const unsigned long remainingSeconds = strtoul(statePayload.c_str(), &end, 10);
+    if (end == statePayload.c_str() || *end != '\0' || remainingSeconds > UINT32_MAX)
+    {
+      return;
+    }
+
+    lvgl_set_timer_state(relayIndex, static_cast<uint32_t>(remainingSeconds));
+    return;
+  }
+}
+
 void subscribeToRelayStateTopics()
 {
   Serial.println("[DEBUG] subscribeToRelayStateTopics: subscribing to relay state topics");
@@ -308,6 +385,9 @@ void subscribeToRelayStateTopics()
                    {
                      Serial.printf("[DEBUG] subscribeToRelayStateTopics: MQTT callback topic='%s' payload='%s'\r\n", topic ? topic : "(null)", payload ? payload : "(null)");
                      handleRelayStateMessage(topic, payload); });
+
+    mqtt.subscribe(relayTimerStateTopics[i], [](const char *topic, const char *payload)
+                   { handleRelayTimerStateMessage(topic, payload); });
   }
 }
 
@@ -327,6 +407,10 @@ void refreshRelayStates()
     Serial.printf("[DEBUG] refreshRelayStates: publishing GET index=%d topic='%s'\r\n", i, relayStateTopics[i]);
     const bool published = mqtt.publish(relayStateTopics[i], "GET");
     Serial.printf("[DEBUG] refreshRelayStates: publish result=%s\r\n", published ? "success" : "failed");
+    mqtt.loop();
+    delay(10);
+
+    mqtt.publish(relayTimerStateTopics[i], "GET");
     mqtt.loop();
     delay(10);
   }
@@ -350,6 +434,8 @@ void setup()
   printStatus(F("Starting TFT..."), true, false);
   tft.init();
   tft.setRotation(1);
+  pinMode(21, OUTPUT);    // Set the backlight pin as output
+  digitalWrite(21, HIGH); // Turn on the backlight
 
   setBackgroundBrightness(SCREEN_BRIGHTNESS_PERCENT); // Set background brightness
 
@@ -398,6 +484,7 @@ void setup()
   {
     Serial.printf("[DEBUG] MQTT connected to %s:%u\r\n", MQTT_BROKER, MQTT_PORT);
     lvgl_set_mqtt_connected(true);
+    relayStateRefreshPending = true;
   };
   mqtt.disconnected_callback = []()
   {
@@ -413,6 +500,7 @@ void setup()
   mqtt.begin();
   subscribeToRelayStateTopics();
   lastRelayStateRefresh = millis();
+  relayStateRefreshPending = true;
 
   // LVGL
   // --------------------
@@ -485,9 +573,10 @@ void loop()
   // Run the MQTT server loop to handle incoming client connections and messages
   mqtt.loop();
 
-  if (millis() - lastRelayStateRefresh >= RELAY_STATE_REFRESH_INTERVAL_MS)
+  if (relayStateRefreshPending || millis() - lastRelayStateRefresh >= RELAY_STATE_REFRESH_INTERVAL_MS)
   {
     lastRelayStateRefresh = millis();
+    relayStateRefreshPending = false;
     refreshRelayStates();
   }
 
