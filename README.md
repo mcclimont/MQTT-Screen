@@ -1,7 +1,7 @@
 # MQTT Screen Project Notes
 
 ## Project Purpose
-The MQTT-Screen project will provide four on-screen buttons that connect to a target ESP32 device running PicoMQTT and control relays.
+The MQTT-Screen project provides four on-screen light toggles and per-light timer controls that connect to a target ESP32 device running PicoMQTT.
 
 ## Hardware and SPI Configuration
 This project uses a single ESP32 board with two separate SPI buses:
@@ -61,3 +61,39 @@ The `set` topics accept these payload values:
 - TOGGLE
 
 The `state` topics will retrieve the current state of `ON` or `OFF`.
+
+## Per-Light Auto-Off Timers
+
+The Screen UI provides an independent timer button beside each light toggle. It opens fixed duration choices of 1, 2, 4, or 8 hours, plus a cancel action. It publishes the selected duration to `home/relayN/timer/set` as `3600`, `7200`, `14400`, or `28800` seconds. The topic contract accepts any positive integer duration in seconds or `CANCEL`. Starting a positive-duration timer turns that light on and starts or replaces its countdown; `CANCEL` clears the countdown without changing the light state. Manually sending `OFF` to the existing relay `set` topic cancels the timer as well. Sending `ON` leaves an active countdown unchanged.
+
+The Screen subscribes to `home/relayN/timer/state` for each relay and requests the current value after MQTT connects and every 30 seconds. The controller reports remaining whole seconds, using `0` for no active timer, when a timer starts, is canceled, expires, or when the Screen requests `GET`. The UI decrements the reported value locally between updates. It shows `--` while MQTT is disconnected, `...` until timer state is reported, and `Set` when no timer is active.
+
+The Screen controls and MQTT client handling, and the matching MQTT-Lights timer-topic handling, are implemented in source. Build and deploy the MQTT-Lights firmware to the controller for end-to-end operation. Timer durations are volatile and do not survive a restart of the MQTT-Lights controller.
+
+## Build and Deployment
+
+### Development Environment
+
+The project is developed on Windows using Visual Studio Code and the pioarduino PlatformIO IDE extension. PlatformIO builds the Arduino framework firmware for the `esp32dev` environment and resolves the libraries declared in `platformio.ini`.
+
+### Configure, Build, and Upload
+
+1. Open the MQTT-Screen project folder in Visual Studio Code and allow PlatformIO to install the project dependencies.
+2. In the project root, copy `include/config.example.h` to `include/config.h` and set the Wi-Fi and MQTT connection values. Keep `include/config.h` private; it is excluded from Git.
+3. Connect the ESP32-2432S028R board over USB and build the firmware:
+
+  ```powershell
+  pio run -e esp32dev
+  ```
+
+4. Upload the firmware to the connected board:
+
+  ```powershell
+  pio run -e esp32dev -t upload
+  ```
+
+The same build and upload targets are available from the PlatformIO controls in Visual Studio Code. If PlatformIO does not detect the board's serial port, select or configure the upload port before uploading.
+
+## Responsible AI
+
+AI tools were used to assist with developing and documenting this project. Project maintainers are responsible for reviewing, testing, and deploying changes.
